@@ -63,6 +63,7 @@
       "node_modules/bindings/**/*",
       "node_modules/node-machine-id/**/*"
     ],
+    "artifactName": "CyberCafe-Manager-Setup-${version}.exe",
     "win": {
       "target": "nsis"
     },
