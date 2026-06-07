@@ -1,0 +1,81 @@
+{
+  "name": "cybercafe-manager",
+  "version": "1.0.0",
+  "description": "CyberCafe Manager - Система управления компьютерным клубом",
+  "author": "Khurshed Boboev",
+  "main": "src/main/main.js",
+  "scripts": {
+    "prestart": "node scripts/check-rebuild.js",
+    "start": "concurrently \"npm run dev:react\" \"wait-on http://localhost:3000 && npm run dev:electron\"",
+    "dev:react": "react-scripts start",
+    "dev:electron": "electron .",
+    "rebuild": "electron-rebuild -f -w better-sqlite3",
+    "build": "npm run build:react && electron-builder",
+    "build:publish": "npm run build:react && electron-builder --publish always",
+    "build:react": "react-scripts build",
+    "postinstall": "electron-rebuild -f -w better-sqlite3"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.8.0",
+    "date-fns": "^3.3.1",
+    "electron-updater": "^6.8.9",
+    "lucide-react": "^0.383.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-router-dom": "^6.22.0",
+    "recharts": "^2.12.2",
+    "uuid": "^9.0.1",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2",
+    "electron": "^29.1.0",
+    "electron-builder": "^24.9.1",
+    "electron-rebuild": "^3.2.9",
+    "react-scripts": "5.0.1",
+    "wait-on": "^7.2.0"
+  },
+  "homepage": "./",
+  "browserslist": {
+    "production": [
+      "last 1 electron version"
+    ],
+    "development": [
+      "last 1 electron version"
+    ]
+  },
+  "build": {
+    "extends": null,
+    "appId": "com.cybercafe.manager",
+    "productName": "CyberCafe Manager",
+    "files": [
+      "build/**/*",
+      "src/main/**/*",
+      "node_modules/**/*",
+      "public/index.html"
+    ],
+    "asarUnpack": [
+      "node_modules/better-sqlite3/**/*",
+      "node_modules/bindings/**/*"
+    ],
+    "win": {
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "khurshed-shavkatzhonovich",
+        "repo": "cybercafe-manager"
+      }
+    ],
+    "directories": {
+      "output": "dist"
+    }
+  }
+}
