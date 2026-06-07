@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts';
 import { format, subDays, startOfWeek, endOfWeek, startOfMonth, endOfMonth, subMonths } from 'date-fns';
-import { Calendar, TrendingUp, Monitor, ShoppingBag } from 'lucide-react';
+import { Calendar, TrendingUp, Monitor, ShoppingBag, Download } from 'lucide-react';
+import * as XLSX from 'xlsx';
 
 const COLORS = ['#6366f1', '#f59e0b', '#10b981', '#06b6d4', '#8b5cf6', '#ec4899'];
 
@@ -52,6 +53,44 @@ export default function Reports() {
     }
   }
 
+  const exportExcel = () => {
+    if (!data) return;
+    const [from, to] = getRange();
+    const wb = XLSX.utils.book_new();
+
+    // Summary sheet
+    const summaryRows = [
+      ['Период', `${from} — ${to}`],
+      ['Выручка всего', data.revenue.total],
+      ['Компьютеры', data.revenue.computers],
+      ['Товары', data.revenue.products],
+      ['Количество счетов', data.revenue.count],
+    ];
+    const ws1 = XLSX.utils.aoa_to_sheet(summaryRows);
+    ws1['!cols'] = [{ wch: 24 }, { wch: 18 }];
+    XLSX.utils.book_append_sheet(wb, ws1, 'Сводка');
+
+    // Daily sheet
+    if (data.daily.length > 0) {
+      const dailyRows = [['Дата', 'Счетов', 'Компьютеры (сом)', 'Товары (сом)', 'Итого (сом)'],
+        ...data.daily.map(d => [d.date, d.count, Math.round(d.computers || 0), Math.round(d.products || 0), Math.round(d.total || 0)])];
+      const ws2 = XLSX.utils.aoa_to_sheet(dailyRows);
+      ws2['!cols'] = [{ wch: 14 }, { wch: 10 }, { wch: 18 }, { wch: 16 }, { wch: 14 }];
+      XLSX.utils.book_append_sheet(wb, ws2, 'По дням');
+    }
+
+    // Top products sheet
+    if (data.topProducts.length > 0) {
+      const prodRows = [['Товар', 'Продано (шт)', 'Выручка (сом)'],
+        ...data.topProducts.map(p => [p.product_name, p.qty, Math.round(p.revenue)])];
+      const ws3 = XLSX.utils.aoa_to_sheet(prodRows);
+      ws3['!cols'] = [{ wch: 28 }, { wch: 14 }, { wch: 16 }];
+      XLSX.utils.book_append_sheet(wb, ws3, 'Топ товаров');
+    }
+
+    XLSX.writeFile(wb, `report_${from}_${to}.xlsx`);
+  };
+
   if (loading) return <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><div className="spinner" /></div>;
 
   const { revenue, daily, topProducts } = data;
@@ -75,6 +114,9 @@ export default function Reports() {
             <h1 className="page-title">Отчётность</h1>
             <p className="page-subtitle">Финансовая статистика</p>
           </div>
+          <button className="btn btn-secondary" onClick={exportExcel}>
+            <Download size={15} /> Экспорт в Excel
+          </button>
         </div>
 
         {/* Period filter */}

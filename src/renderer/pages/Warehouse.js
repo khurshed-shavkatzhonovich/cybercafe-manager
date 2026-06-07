@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Plus, Search, Edit2, Trash2, X, Upload, Package, FileSpreadsheet, Check, AlertCircle } from 'lucide-react';
+import { Plus, Search, Edit2, Trash2, X, Upload, Package, FileSpreadsheet, Check, AlertCircle, PlusCircle, History } from 'lucide-react';
 import * as XLSX from 'xlsx';
-import { useToast } from '../App';
+import { useToast, useApp } from '../App';
 
 const UNITS = ['шт', 'л', 'мл', '500мл', '1л', '1.5л', '2л', 'кг', 'г', 'уп'];
 
@@ -347,8 +347,108 @@ function ProductImportModal({ categories, onClose, onDone }) {
   );
 }
 
+// ── Restock Modal ─────────────────────────────────────────────────────────────
+function RestockModal({ product, onClose, onDone }) {
+  const showToast = useToast();
+  useEscClose(onClose);
+  const [qty, setQty] = useState('');
+  const [note, setNote] = useState('');
+
+  const submit = async () => {
+    const n = Number(qty);
+    if (!n || n <= 0) { showToast('Введите количество', 'error'); return; }
+    const res = await window.api.restockProduct?.(product.id, n, note);
+    if (res?.ok) {
+      showToast(`+${n} ${product.unit} добавлено`);
+      onDone();
+    } else showToast('Ошибка', 'error');
+  };
+
+  return (
+    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="modal" style={{ maxWidth: 380 }}>
+        <div className="modal-header">
+          <h2 className="modal-title">Пополнить склад</h2>
+          <button className="btn btn-ghost btn-icon" onClick={onClose}><X size={18} /></button>
+        </div>
+        <div style={{ fontWeight: 600, marginBottom: 16, color: 'var(--text-secondary)' }}>{product.name}</div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div className="form-group">
+            <label>Количество ({product.unit})</label>
+            <input className="input" type="number" min={1} value={qty} onChange={e => setQty(e.target.value)} placeholder="0" autoFocus />
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+            Текущий остаток: <strong>{product.stock_quantity} {product.unit}</strong>
+            {qty > 0 && <> → <strong style={{ color: 'var(--accent-green)' }}>{product.stock_quantity + Number(qty)} {product.unit}</strong></>}
+          </div>
+          <div className="form-group">
+            <label>Примечание (необязательно)</label>
+            <input className="input" value={note} onChange={e => setNote(e.target.value)} placeholder="Поступление от поставщика..." />
+          </div>
+        </div>
+        <div className="modal-footer">
+          <button className="btn btn-secondary" onClick={onClose}>Отмена</button>
+          <button className="btn btn-primary" onClick={submit}>Добавить</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Movement History Modal ────────────────────────────────────────────────────
+function MovementModal({ product, onClose }) {
+  useEscClose(onClose);
+  const [movements, setMovements] = useState([]);
+
+  useEffect(() => {
+    window.api.getStockMovements?.(product.id).then(m => setMovements(m || []));
+  }, [product.id]);
+
+  const typeLabel = { restock: 'Поступление', sale: 'Продажа', cancel: 'Отмена продажи' };
+  const typeColor = { restock: 'var(--accent-green)', sale: 'var(--accent-red)', cancel: 'var(--accent-gold)' };
+
+  const fmt = (iso) => new Date(iso).toLocaleString('ru', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+
+  return (
+    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="modal" style={{ maxWidth: 480, maxHeight: '80vh', overflow: 'auto' }}>
+        <div className="modal-header">
+          <h2 className="modal-title">История движения</h2>
+          <button className="btn btn-ghost btn-icon" onClick={onClose}><X size={18} /></button>
+        </div>
+        <div style={{ fontWeight: 600, marginBottom: 14, color: 'var(--text-secondary)' }}>{product.name}</div>
+        {movements.length === 0 ? (
+          <div className="empty-state" style={{ padding: '30px 0' }}>
+            <div className="empty-state-icon">📋</div>
+            <div className="empty-state-text">История пуста</div>
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {movements.map(m => (
+              <div key={m.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', background: 'var(--bg-hover)', borderRadius: 8 }}>
+                <div style={{ width: 8, height: 8, borderRadius: '50%', background: typeColor[m.type] || 'var(--text-muted)', flexShrink: 0 }} />
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 12, fontWeight: 600 }}>{typeLabel[m.type] || m.type}</div>
+                  {m.note && <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>{m.note}</div>}
+                </div>
+                <div style={{ textAlign: 'right' }}>
+                  <div style={{ fontFamily: 'var(--font-mono)', fontWeight: 700, fontSize: 13, color: typeColor[m.type] }}>
+                    {m.type === 'restock' ? '+' : '-'}{m.quantity} {product.unit}
+                  </div>
+                  <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>{fmt(m.created_at)}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── Main Page ─────────────────────────────────────────────────────────────────
 export default function Warehouse() {
+  const { refreshLowStock } = useApp();
   const showToast = useToast();
   const [products, setProducts] = useState([]);
   const [categories, setCategories] = useState([]);
@@ -357,6 +457,8 @@ export default function Warehouse() {
   const [showModal, setShowModal] = useState(false);
   const [editProduct, setEditProduct] = useState(null);
   const [showImport, setShowImport] = useState(false);
+  const [restockProduct, setRestockProduct] = useState(null);
+  const [historyProduct, setHistoryProduct] = useState(null);
 
   const load = async () => {
     const [p, c] = await Promise.all([window.api?.getAllProducts(), window.api?.getProductCategories()]);
@@ -489,6 +591,8 @@ export default function Warehouse() {
                     <td><span className={`badge ${p.is_active ? 'badge-open' : 'badge-cancelled'}`}>{p.is_active ? 'Активен' : 'Скрыт'}</span></td>
                     <td>
                       <div style={{ display: 'flex', gap: 4 }}>
+                        <button className="btn btn-ghost btn-icon btn-sm" title="Пополнить" onClick={() => setRestockProduct(p)}><PlusCircle size={14} /></button>
+                        <button className="btn btn-ghost btn-icon btn-sm" title="История" onClick={() => setHistoryProduct(p)}><History size={14} /></button>
                         <button className="btn btn-ghost btn-icon btn-sm" onClick={() => { setEditProduct(p); setShowModal(true); }}><Edit2 size={14} /></button>
                         <button className="btn btn-danger btn-icon btn-sm" onClick={() => handleDelete(p.id)}><Trash2 size={14} /></button>
                       </div>
@@ -506,6 +610,12 @@ export default function Warehouse() {
       )}
       {showImport && (
         <ProductImportModal categories={categories} onClose={() => setShowImport(false)} onDone={() => { setShowImport(false); load(); }} />
+      )}
+      {restockProduct && (
+        <RestockModal product={restockProduct} onClose={() => setRestockProduct(null)} onDone={() => { setRestockProduct(null); load(); refreshLowStock?.(); }} />
+      )}
+      {historyProduct && (
+        <MovementModal product={historyProduct} onClose={() => setHistoryProduct(null)} />
       )}
     </div>
   );

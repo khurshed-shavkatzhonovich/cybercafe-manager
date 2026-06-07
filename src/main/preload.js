@@ -29,6 +29,7 @@ contextBridge.exposeInMainWorld('api', {
   updateProduct: (id, p) => ipcRenderer.invoke('products:update', id, p),
   deleteProduct: (id) => ipcRenderer.invoke('products:delete', id),
   getProductCategories: () => ipcRenderer.invoke('products:categories'),
+  getLowStockProducts: (threshold) => ipcRenderer.invoke('products:lowStock', threshold),
 
   // Orders
   getOrders: (filter) => ipcRenderer.invoke('orders:getAll', filter),
@@ -54,4 +55,28 @@ contextBridge.exposeInMainWorld('api', {
   installUpdate: () => ipcRenderer.invoke('updater:install'),
   onUpdateStatus: (cb) => ipcRenderer.on('updater:status', (_, data) => cb(data)),
   offUpdateStatus: () => ipcRenderer.removeAllListeners('updater:status'),
+
+  // Backup
+  chooseBackupDir: () => ipcRenderer.invoke('backup:chooseDir'),
+  getBackupPath: () => ipcRenderer.invoke('backup:getSavedPath'),
+  setBackupPath: (p) => ipcRenderer.invoke('backup:setSavedPath', p),
+  createBackup: (dir) => ipcRenderer.invoke('backup:create', dir),
+  listBackups: (dir) => ipcRenderer.invoke('backup:list', dir),
+  restoreBackup: (filePath) => ipcRenderer.invoke('backup:restore', filePath),
+
+  // Stock movements
+  restockProduct: (productId, qty, note) => ipcRenderer.invoke('stock:restock', productId, qty, note),
+  getStockMovements: (productId) => ipcRenderer.invoke('stock:getMovements', productId),
+  getAllStockMovements: () => ipcRenderer.invoke('stock:getAllMovements'),
+
+  // License
+  getMachineId: () => ipcRenderer.invoke('license:getMachineId'),
+  getLicenseStatus: () => ipcRenderer.invoke('license:getStatus'),
+  activateLicense: (key) => ipcRenderer.invoke('license:activate', key),
+  getDateIntegrity: () => ipcRenderer.invoke('license:getDateIntegrity'),
+
+  // Logs
+  readLogs: () => ipcRenderer.invoke('logs:read'),
+  clearLogs: () => ipcRenderer.invoke('logs:clear'),
+  downloadLogs: () => ipcRenderer.invoke('logs:download'),
 });

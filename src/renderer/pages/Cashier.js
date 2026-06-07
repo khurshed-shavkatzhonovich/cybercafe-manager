@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Plus, Search, X, Edit2, CheckCircle, XCircle, Merge, Eye } from 'lucide-react';
-import { useToast } from '../App';
+import { useToast, useApp } from '../App';
 
 const LABEL_STYLE = {
   fontSize: 10, color: 'var(--text-muted)', fontWeight: 700,
@@ -232,9 +232,10 @@ function OrderModal({ order, onClose, onSave }) {
 
                 {/* Rows */}
                 {orderComputers.map(c => {
-                  const rowComps = c.row_room_id
+                  const natSort = (a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+                  const rowComps = (c.row_room_id
                     ? computers.filter(x => Number(x.room_id) === Number(c.row_room_id))
-                    : computers;
+                    : computers).sort(natSort);
                   return (
                     <div key={c._key || c.id} style={{ display: 'grid', gridTemplateColumns: '110px 1fr 72px 60px 72px auto', gap: 6, alignItems: 'center' }}>
                       {/* Room filter */}
@@ -556,6 +557,7 @@ function ViewModal({ order, onClose }) {
 // ── Main Cashier Page ─────────────────────────────────────────────────────────
 export default function Cashier() {
   const showToast = useToast();
+  const { isReadOnly } = useApp();
   const [tab, setTab] = useState('open');
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -625,7 +627,12 @@ export default function Cashier() {
             {tab === 'open' && orders.length >= 2 && (
               <button className="btn btn-secondary" onClick={() => setShowMerge(true)}><Merge size={15} /> Объединить</button>
             )}
-            <button className="btn btn-primary" onClick={() => { setEditOrder(null); setShowOrderModal(true); }}>
+            <button
+              className="btn btn-primary"
+              onClick={() => { setEditOrder(null); setShowOrderModal(true); }}
+              disabled={isReadOnly}
+              title={isReadOnly ? 'Лицензия истекла — режим просмотра' : undefined}
+            >
               <Plus size={15} /> Новый счёт
             </button>
           </div>
@@ -671,7 +678,7 @@ export default function Cashier() {
                 : tab === 'open' ? 'Нет открытых счетов' : tab === 'closed' ? 'Нет закрытых счетов' : 'Нет отменённых счетов'}
             </div>
             {tab === 'open' && !search && (
-              <button className="btn btn-primary btn-sm" onClick={() => { setEditOrder(null); setShowOrderModal(true); }}><Plus size={13} /> Создать счёт</button>
+              <button className="btn btn-primary btn-sm" onClick={() => { setEditOrder(null); setShowOrderModal(true); }} disabled={isReadOnly}><Plus size={13} /> Создать счёт</button>
             )}
           </div>
         ) : (

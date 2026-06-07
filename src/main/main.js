@@ -1,10 +1,33 @@
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const path = require('path');
+const fs = require('fs');
 const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
 const { autoUpdater } = require('electron-updater');
+const Logger = require('./logger');
+const LicenseManager = require('./license');
 
 let mainWindow;
 let db;
+let dbPath;
+let logger;
+let licenseManager;
+
+// ─── Window state persistence ─────────────────────────────────────────────
+const windowStatePath = () => path.join(app.getPath('userData'), 'window-state.json');
+
+function loadWindowState() {
+  try {
+    return JSON.parse(fs.readFileSync(windowStatePath(), 'utf8'));
+  } catch { return { width: 1400, height: 900 }; }
+}
+
+function saveWindowState(win) {
+  if (win.isMaximized() || win.isMinimized()) return;
+  try {
+    const bounds = win.getBounds();
+    fs.writeFileSync(windowStatePath(), JSON.stringify(bounds));
+  } catch {}
+}
 
 // ─── Auto-updater setup ────────────────────────────────────────────────────
 autoUpdater.autoDownload = false;
@@ -37,7 +60,7 @@ autoUpdater.on('error', (err) =>
 function initDatabase() {
   const Database = require('better-sqlite3');
   const userDataPath = app.getPath('userData');
-  const dbPath = path.join(userDataPath, 'cybercafe.db');
+  dbPath = path.join(userDataPath, 'cybercafe.db');
   
   db = new Database(dbPath);
   db.pragma('journal_mode = WAL');
@@ -165,6 +188,19 @@ function initDatabase() {
     );
   `);
 
+  // Stock movements
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS stock_movements (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      product_id INTEGER,
+      product_name TEXT NOT NULL,
+      type TEXT NOT NULL,
+      quantity REAL NOT NULL,
+      note TEXT DEFAULT '',
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+
   // Migrations
   try { db.exec('ALTER TABLE orders ADD COLUMN customer_name TEXT DEFAULT ""'); } catch {}
   try { db.exec('ALTER TABLE order_computers ADD COLUMN rate_per_hour REAL DEFAULT 0'); } catch {}
@@ -173,19 +209,45 @@ function initDatabase() {
 }
 
 function createWindow() {
+  const saved = loadWindowState();
   mainWindow = new BrowserWindow({
-    width: 1400,
-    height: 900,
+    width: saved.width || 1400,
+    height: saved.height || 900,
+    x: saved.x,
+    y: saved.y,
     minWidth: 1100,
     minHeight: 700,
     frame: false,
     titleBarStyle: 'hidden',
     backgroundColor: '#0a0a0f',
+    icon: path.join(__dirname, '../../assets/icon.ico'),
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
       preload: path.join(__dirname, 'preload.js'),
     },
+  });
+
+  // Save window state on resize/move
+  ['resize', 'move'].forEach(evt => mainWindow.on(evt, () => saveWindowState(mainWindow)));
+
+  // Confirm close if open orders exist
+  mainWindow.on('close', (e) => {
+    try {
+      const openCount = db.prepare("SELECT COUNT(*) as c FROM orders WHERE status='open'").get()?.c || 0;
+      if (openCount > 0) {
+        e.preventDefault();
+        dialog.showMessageBox(mainWindow, {
+          type: 'warning',
+          buttons: ['Закрыть всё равно', 'Отмена'],
+          defaultId: 1,
+          cancelId: 1,
+          title: 'Открытые счета',
+          message: `Есть ${openCount} открыт${openCount === 1 ? 'ый' : 'ых'} счёт${openCount === 1 ? '' : 'а'}`,
+          detail: 'Данные сохранены в базе, счета останутся открытыми. Закрыть приложение?',
+        }).then(({ response }) => { if (response === 0) mainWindow.destroy(); });
+      }
+    } catch {}
   });
 
   if (isDev) {
@@ -196,9 +258,56 @@ function createWindow() {
   }
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  const userDataPath = app.getPath('userData');
+
+  // ── Logger (init first so everything below can use it) ──────────────────
+  logger = new Logger(path.join(userDataPath, 'error.log'));
+  logger.prune();
+  logger.info(`App started v${app.getVersion()}`);
+
+  // ── License check ────────────────────────────────────────────────────────
+  try {
+    const { machineId } = require('node-machine-id');
+    const mid = await machineId();
+    licenseManager = new LicenseManager(userDataPath, mid);
+    const dateCheck = licenseManager.checkDateIntegrity();
+    if (dateCheck.suspicious) {
+      logger.warn('Date integrity warning: ' + dateCheck.reason);
+    }
+    const status = licenseManager.getStatus();
+    logger.info(`License status: ${status.status}${status.expiresAt ? ' expires ' + status.expiresAt : ''}`);
+  } catch (e) {
+    logger.error('License init error', e);
+  }
+
+  // Catch unhandled exceptions in main process
+  process.on('uncaughtException', (err) => {
+    logger && logger.error('Uncaught exception', err);
+  });
+  process.on('unhandledRejection', (reason) => {
+    logger && logger.error('Unhandled rejection', reason instanceof Error ? reason : new Error(String(reason)));
+  });
+
   initDatabase();
   createWindow();
+
+  // Auto-backup on startup
+  try {
+    const backupDir = db.prepare("SELECT value FROM settings WHERE key='backup_path'").get()?.value;
+    if (backupDir && fs.existsSync(backupDir)) {
+      const stamp = new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-');
+      const dest = path.join(backupDir, `cybercafe-${stamp}.db`);
+      db.backup(dest).catch(() => {});
+      // Keep only last 7 backups
+      const files = fs.readdirSync(backupDir)
+        .filter(f => f.startsWith('cybercafe-') && f.endsWith('.db'))
+        .map(f => ({ f, t: fs.statSync(path.join(backupDir, f)).mtimeMs }))
+        .sort((a, b) => b.t - a.t);
+      files.slice(7).forEach(({ f }) => { try { fs.unlinkSync(path.join(backupDir, f)); } catch {} });
+    }
+  } catch {}
+
   // Check for updates 3 seconds after window ready (only in packaged app)
   if (!isDev) {
     setTimeout(() => {
@@ -231,6 +340,86 @@ ipcMain.handle('updater:download', async () => {
 });
 ipcMain.handle('updater:install', () => {
   autoUpdater.quitAndInstall();
+});
+
+// ─── Low stock ─────────────────────────────────────────────────────────────
+ipcMain.handle('products:lowStock', (_, threshold = 5) => {
+  return db.prepare('SELECT * FROM products WHERE stock_quantity <= ? AND is_active = 1 ORDER BY stock_quantity ASC').all(threshold);
+});
+
+// ─── Backup ────────────────────────────────────────────────────────────────
+ipcMain.handle('backup:chooseDir', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, { properties: ['openDirectory'], title: 'Выберите папку для резервных копий' });
+  return result.canceled ? null : result.filePaths[0];
+});
+
+ipcMain.handle('backup:getSavedPath', () => {
+  return db.prepare("SELECT value FROM settings WHERE key='backup_path'").get()?.value || '';
+});
+
+ipcMain.handle('backup:setSavedPath', (_, p) => {
+  db.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('backup_path', ?)").run(p);
+  return true;
+});
+
+ipcMain.handle('backup:create', async (_, dir) => {
+  if (!dir || !fs.existsSync(dir)) return { ok: false, error: 'Папка не найдена' };
+  try {
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[T:]/g, '-');
+    const dest = path.join(dir, `cybercafe-${stamp}.db`);
+    await db.backup(dest);
+    // Keep last 7
+    const files = fs.readdirSync(dir)
+      .filter(f => f.startsWith('cybercafe-') && f.endsWith('.db'))
+      .map(f => ({ f, t: fs.statSync(path.join(dir, f)).mtimeMs }))
+      .sort((a, b) => b.t - a.t);
+    files.slice(7).forEach(({ f }) => { try { fs.unlinkSync(path.join(dir, f)); } catch {} });
+    return { ok: true, path: dest };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('backup:list', (_, dir) => {
+  if (!dir || !fs.existsSync(dir)) return [];
+  return fs.readdirSync(dir)
+    .filter(f => f.startsWith('cybercafe-') && f.endsWith('.db'))
+    .map(f => {
+      const full = path.join(dir, f);
+      const stat = fs.statSync(full);
+      return { name: f, path: full, size: Math.round(stat.size / 1024), date: stat.mtime.toISOString() };
+    })
+    .sort((a, b) => new Date(b.date) - new Date(a.date));
+});
+
+ipcMain.handle('backup:restore', async (_, filePath) => {
+  if (!fs.existsSync(filePath)) return { ok: false, error: 'Файл не найден' };
+  try {
+    db.close();
+    fs.copyFileSync(filePath, dbPath);
+    app.relaunch();
+    app.exit(0);
+    return { ok: true };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+// ─── Stock movements ───────────────────────────────────────────────────────
+ipcMain.handle('stock:restock', (_, productId, qty, note) => {
+  const product = db.prepare('SELECT * FROM products WHERE id = ?').get(productId);
+  if (!product) return { ok: false };
+  db.prepare('UPDATE products SET stock_quantity = stock_quantity + ? WHERE id = ?').run(qty, productId);
+  db.prepare("INSERT INTO stock_movements (product_id, product_name, type, quantity, note) VALUES (?, ?, 'restock', ?, ?)").run(productId, product.name, qty, note || '');
+  return { ok: true, newQty: (product.stock_quantity + qty) };
+});
+
+ipcMain.handle('stock:getMovements', (_, productId) => {
+  return db.prepare('SELECT * FROM stock_movements WHERE product_id = ? ORDER BY created_at DESC LIMIT 100').all(productId);
+});
+
+ipcMain.handle('stock:getAllMovements', () => {
+  return db.prepare(`
+    SELECT m.*, p.stock_quantity as current_qty
+    FROM stock_movements m LEFT JOIN products p ON m.product_id = p.id
+    ORDER BY m.created_at DESC LIMIT 200
+  `).all();
 });
 
 // ─── Window controls ───────────────────────────────────────────────────────
@@ -478,6 +667,54 @@ ipcMain.handle('orders:merge', (_, orderIds) => {
     db.prepare("UPDATE orders SET status='cancelled' WHERE id=?").run(oid);
   }
   return db.prepare('SELECT * FROM orders WHERE id = ?').get(newId);
+});
+
+// ─── License ───────────────────────────────────────────────────────────────
+ipcMain.handle('license:getMachineId', async () => {
+  if (licenseManager) return licenseManager.getMachineId();
+  try {
+    const { machineId } = require('node-machine-id');
+    return await machineId();
+  } catch (e) { return 'unavailable'; }
+});
+
+ipcMain.handle('license:getStatus', () => {
+  if (!licenseManager) return { status: 'none' };
+  return licenseManager.getStatus();
+});
+
+ipcMain.handle('license:activate', (_, keyStr) => {
+  if (!licenseManager) return { ok: false, error: 'Менеджер лицензий не инициализирован' };
+  const result = licenseManager.activate(keyStr);
+  if (result.ok) logger && logger.info('License activated successfully');
+  else logger && logger.warn('License activation failed: ' + result.error);
+  return result;
+});
+
+ipcMain.handle('license:getDateIntegrity', () => {
+  if (!licenseManager) return { suspicious: false };
+  return licenseManager.checkDateIntegrity();
+});
+
+// ─── Logs ─────────────────────────────────────────────────────────────────
+ipcMain.handle('logs:read', () => logger ? logger.read() : '');
+ipcMain.handle('logs:clear', () => { if (logger) logger.clear(); return true; });
+ipcMain.handle('logs:getPath', () => logger ? logger.getPath() : null);
+ipcMain.handle('logs:download', async () => {
+  if (!logger) return { ok: false };
+  const logPath = logger.getPath();
+  if (!fs.existsSync(logPath)) return { ok: false, error: 'Лог-файл пуст' };
+  try {
+    const result = await dialog.showSaveDialog(mainWindow, {
+      title: 'Сохранить лог-файл',
+      defaultPath: 'cybercafe-error.log',
+      filters: [{ name: 'Log files', extensions: ['log', 'txt'] }],
+    });
+    if (result.canceled) return { ok: false };
+    fs.copyFileSync(logPath, result.filePath);
+    shell.showItemInFolder(result.filePath);
+    return { ok: true };
+  } catch (e) { return { ok: false, error: e.message }; }
 });
 
 // ─── Reports ───────────────────────────────────────────────────────────────

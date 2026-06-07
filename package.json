@@ -1,6 +1,6 @@
 {
   "name": "cybercafe-manager",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "CyberCafe Manager - Система управления компьютерным клубом",
   "author": "Khurshed Boboev",
   "main": "src/main/main.js",
@@ -20,6 +20,7 @@
     "date-fns": "^3.3.1",
     "electron-updater": "^6.8.9",
     "lucide-react": "^0.383.0",
+    "node-machine-id": "^1.1.12",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-router-dom": "^6.22.0",
@@ -48,7 +49,9 @@
     "extends": null,
     "appId": "com.cybercafe.manager",
     "productName": "CyberCafe Manager",
+    "icon": "assets/icon",
     "files": [
+      "assets/**/*",
       "build/**/*",
       "src/main/**/*",
       "node_modules/**/*",
@@ -56,7 +59,8 @@
     ],
     "asarUnpack": [
       "node_modules/better-sqlite3/**/*",
-      "node_modules/bindings/**/*"
+      "node_modules/bindings/**/*",
+      "node_modules/node-machine-id/**/*"
     ],
     "win": {
       "target": "nsis"

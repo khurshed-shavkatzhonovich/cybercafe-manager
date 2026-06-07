@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Plus, Edit2, Trash2, X, Save, Monitor, Upload, FileSpreadsheet, Check, AlertCircle, RefreshCw, Download, Zap } from 'lucide-react';
+import { Plus, Edit2, Trash2, X, Save, Monitor, Upload, FileSpreadsheet, Check, AlertCircle, RefreshCw, Download, Zap, KeyRound, Copy, ShieldCheck, ShieldAlert, ShieldX, ScrollText } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { useApp, useToast } from '../App';
 
@@ -16,16 +16,22 @@ function useEscClose(onClose) {
 function RoomModal({ room, onClose, onSave }) {
   const showToast = useToast();
   useEscClose(onClose);
-  const TYPES = [['standard', 'Стандарт'], ['vip', 'VIP'], ['comfort', 'Комфорт'], ['other', 'Другое']];
+  const PRESETS = ['standard', 'vip', 'comfort'];
+  const PRESET_LABELS = { standard: 'Стандарт', vip: 'VIP', comfort: 'Комфорт' };
   const COLORS = ['#6366f1', '#f59e0b', '#10b981', '#06b6d4', '#ef4444', '#8b5cf6', '#ec4899', '#f97316'];
-  const [form, setForm] = useState({ name: '', type: 'standard', color: '#6366f1', ...room });
+
+  const initType = room?.type || 'standard';
+  const isCustom = initType && !PRESETS.includes(initType);
+  const [form, setForm] = useState({ name: '', color: '#6366f1', ...room, type: isCustom ? '__custom__' : initType });
+  const [customType, setCustomType] = useState(isCustom ? initType : '');
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
 
   const submit = async () => {
     if (!form.name.trim()) { showToast('Введите название', 'error'); return; }
+    const finalType = form.type === '__custom__' ? (customType.trim() || 'other') : form.type;
     try {
-      if (room?.id) await window.api.updateRoom(room.id, form);
-      else await window.api.createRoom(form);
+      if (room?.id) await window.api.updateRoom(room.id, { ...form, type: finalType });
+      else await window.api.createRoom({ ...form, type: finalType });
       showToast(room?.id ? 'Комната обновлена' : 'Комната добавлена');
       onSave();
     } catch { showToast('Ошибка при сохранении', 'error'); }
@@ -46,8 +52,19 @@ function RoomModal({ room, onClose, onSave }) {
           <div className="form-group">
             <label>Тип</label>
             <select className="select" value={form.type} onChange={e => set('type', e.target.value)}>
-              {TYPES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+              {PRESETS.map(v => <option key={v} value={v}>{PRESET_LABELS[v]}</option>)}
+              <option value="__custom__">Другое (своё название)</option>
             </select>
+            {form.type === '__custom__' && (
+              <input
+                className="input"
+                style={{ marginTop: 8 }}
+                value={customType}
+                onChange={e => setCustomType(e.target.value)}
+                placeholder="Например: Игровой зал, Лаунж..."
+                autoFocus
+              />
+            )}
           </div>
           <div className="form-group">
             <label>Цвет</label>
@@ -135,9 +152,13 @@ function ImportModal({ type, rooms, onClose, onDone }) {
     rooms: {
       title: 'Импорт комнат из Excel',
       columns: ['Название', 'Тип', 'Цвет'],
-      hint: 'Тип: standard / vip / comfort / other. Цвет: HEX (#6366f1) — необязательно.',
-      example: [['Общий зал', 'standard', '#6366f1'], ['VIP зал', 'vip', '#f59e0b'], ['Комфорт', 'comfort', '#10b981']],
-      parse: row => ({ name: String(row[0] || '').trim(), type: String(row[1] || 'standard').trim(), color: String(row[2] || '#6366f1').trim() }),
+      hint: 'Тип: standard / vip / comfort — или любое своё название (например "Игровой зал"). Цвет: HEX (#6366f1) — необязательно.',
+      example: [['Общий зал', 'standard', '#6366f1'], ['VIP зал', 'vip', '#f59e0b'], ['Игровой', 'Игровой', '#06b6d4']],
+      parse: row => {
+        const rawType = String(row[1] || '').trim();
+        const type = rawType || 'standard';
+        return { name: String(row[0] || '').trim(), type, color: String(row[2] || '#6366f1').trim() };
+      },
       validate: r => r.name,
     },
     computers: {
@@ -461,9 +482,386 @@ function UpdatesTab({ appVersion, updateStatus, updateInfo }) {
   );
 }
 
+// ── Backup Tab ────────────────────────────────────────────────────────────────
+function BackupTab() {
+  const showToast = useToast();
+  const [backupPath, setBackupPath] = useState('');
+  const [backups, setBackups] = useState([]);
+  const [creating, setCreating] = useState(false);
+  const [restoring, setRestoring] = useState(null);
+
+  useEffect(() => {
+    window.api.getBackupPath?.().then(p => {
+      setBackupPath(p || '');
+      if (p) loadBackups(p);
+    });
+  }, []);
+
+  const loadBackups = async (dir) => {
+    const list = await window.api.listBackups?.(dir) || [];
+    setBackups(list);
+  };
+
+  const chooseDir = async () => {
+    const dir = await window.api.chooseBackupDir?.();
+    if (!dir) return;
+    await window.api.setBackupPath?.(dir);
+    setBackupPath(dir);
+    loadBackups(dir);
+    showToast('Папка сохранена');
+  };
+
+  const createNow = async () => {
+    if (!backupPath) { showToast('Сначала выберите папку', 'error'); return; }
+    setCreating(true);
+    const res = await window.api.createBackup?.(backupPath);
+    setCreating(false);
+    if (res?.ok) { showToast('Резервная копия создана'); loadBackups(backupPath); }
+    else showToast('Ошибка: ' + (res?.error || ''), 'error');
+  };
+
+  const restore = async (b) => {
+    if (!window.confirm(`Восстановить базу данных из "${b.name}"?\n\nПриложение перезапустится автоматически.`)) return;
+    setRestoring(b.path);
+    await window.api.restoreBackup?.(b.path);
+  };
+
+  const fmt = (iso) => {
+    const d = new Date(iso);
+    return d.toLocaleString('ru', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  };
+
+  return (
+    <div style={{ maxWidth: 580 }}>
+      <div className="card" style={{ marginBottom: 16 }}>
+        <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 16 }}>Папка резервных копий</div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12 }}>
+          <input className="input" readOnly value={backupPath || 'Папка не выбрана'} style={{ flex: 1, color: backupPath ? 'var(--text-primary)' : 'var(--text-muted)', cursor: 'default' }} />
+          <button className="btn btn-secondary" onClick={chooseDir}>Обзор...</button>
+        </div>
+        <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 16 }}>
+          При каждом запуске приложения автоматически создаётся копия. Хранятся последние 7 копий.
+        </div>
+        <button className="btn btn-primary" onClick={createNow} disabled={creating || !backupPath}>
+          {creating ? 'Создаём...' : 'Создать копию сейчас'}
+        </button>
+      </div>
+
+      {backups.length > 0 && (
+        <div className="card">
+          <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 14 }}>Доступные копии ({backups.length})</div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {backups.map((b, i) => (
+              <div key={b.path} style={{
+                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                padding: '10px 14px', background: 'var(--bg-hover)', borderRadius: 10,
+                border: i === 0 ? '1px solid var(--accent)' : '1px solid transparent',
+              }}>
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}>
+                    {i === 0 && <span style={{ fontSize: 10, background: 'var(--accent)', color: 'white', borderRadius: 4, padding: '1px 5px', fontWeight: 700 }}>Последняя</span>}
+                    {fmt(b.date)}
+                  </div>
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>{b.size} КБ</div>
+                </div>
+                <button
+                  className="btn btn-secondary btn-sm"
+                  disabled={restoring === b.path}
+                  onClick={() => restore(b)}
+                  style={{ fontSize: 11 }}
+                >
+                  {restoring === b.path ? 'Восстановление...' : 'Восстановить'}
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {backupPath && backups.length === 0 && (
+        <div className="empty-state">
+          <div className="empty-state-icon">💾</div>
+          <div className="empty-state-text">Резервных копий ещё нет</div>
+          <button className="btn btn-primary btn-sm" onClick={createNow}>Создать первую</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── License Tab ───────────────────────────────────────────────────────────────
+function LicenseTab() {
+  const showToast = useToast();
+  const { licenseStatus, licenseInfo, loadLicense } = useApp();
+  const [machineId, setMachineId] = useState('');
+  const [keyInput, setKeyInput] = useState('');
+  const [activating, setActivating] = useState(false);
+  const [error, setError] = useState('');
+  const [copiedId, setCopiedId] = useState(false);
+  const [copiedKey, setCopiedKey] = useState(false);
+  const [showRenewInput, setShowRenewInput] = useState(false);
+
+  useEffect(() => {
+    window.api?.getMachineId?.().then(id => setMachineId(id || ''));
+  }, []);
+
+  const copyText = async (text, setter) => {
+    try { await navigator.clipboard.writeText(text); setter(true); setTimeout(() => setter(false), 2000); } catch {}
+  };
+
+  const handleActivate = async () => {
+    const key = keyInput.trim();
+    if (!key) { setError('Введите ключ'); return; }
+    setActivating(true);
+    setError('');
+    const result = await window.api?.activateLicense?.(key);
+    setActivating(false);
+    if (result?.ok) {
+      await loadLicense?.();
+      showToast('Лицензия активирована');
+      setShowRenewInput(false);
+      setKeyInput('');
+    } else {
+      setError(result?.error || 'Неверный ключ');
+    }
+  };
+
+  const statusConfig = {
+    active: { color: 'var(--accent-green)', bg: 'rgba(16,185,129,0.1)', border: 'rgba(16,185,129,0.3)', icon: ShieldCheck, label: 'Активна' },
+    grace: { color: 'var(--accent-gold)', bg: 'rgba(245,158,11,0.1)', border: 'rgba(245,158,11,0.3)', icon: ShieldAlert, label: 'Истекает' },
+    readonly: { color: 'var(--accent-red)', bg: 'rgba(239,68,68,0.1)', border: 'rgba(239,68,68,0.3)', icon: ShieldX, label: 'Истекла (просмотр)' },
+    invalid: { color: 'var(--accent-red)', bg: 'rgba(239,68,68,0.1)', border: 'rgba(239,68,68,0.3)', icon: ShieldX, label: 'Недействительна' },
+    none: { color: 'var(--text-muted)', bg: 'var(--bg-hover)', border: 'var(--border)', icon: ShieldX, label: 'Не активирована' },
+  };
+
+  const cfg = statusConfig[licenseStatus] || statusConfig.none;
+  const StatusIcon = cfg.icon;
+  const hasLicense = licenseInfo && licenseStatus !== 'none' && licenseStatus !== 'invalid';
+  const typeLabels = { annual: 'Годовая', biennial: 'Двухлетняя', lifetime: 'Бессрочная', trial: 'Пробная' };
+
+  return (
+    <div style={{ maxWidth: 520 }}>
+      {/* Status Card */}
+      <div className="card" style={{ marginBottom: 16 }}>
+        <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 16 }}>Статус лицензии</div>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14, padding: '14px 16px', background: cfg.bg, border: `1px solid ${cfg.border}`, borderRadius: 12, marginBottom: hasLicense ? 16 : 0 }}>
+          <StatusIcon size={22} color={cfg.color} style={{ flexShrink: 0 }} />
+          <div>
+            <div style={{ fontWeight: 700, fontSize: 14, color: cfg.color }}>{cfg.label}</div>
+            {licenseStatus === 'grace' && licenseInfo && (
+              <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>
+                Осталось {licenseInfo.daysLeft} {licenseInfo.daysLeft === 1 ? 'день' : licenseInfo.daysLeft < 5 ? 'дня' : 'дней'} — обновите ключ
+              </div>
+            )}
+            {licenseStatus === 'readonly' && (
+              <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>Создание новых операций заблокировано</div>
+            )}
+          </div>
+        </div>
+
+        {hasLicense && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {[
+              ['Клуб', licenseInfo.clubName],
+              ['Тип', typeLabels[licenseInfo.licenseType] || licenseInfo.licenseType],
+              ['Дата выдачи', licenseInfo.issuedAt],
+              ['Действует до', licenseInfo.expiresAt],
+            ].map(([label, value]) => value && (
+              <div key={label} style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13 }}>
+                <span style={{ color: 'var(--text-muted)' }}>{label}</span>
+                <span style={{ fontWeight: 600 }}>{value}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Machine ID */}
+      <div className="card" style={{ marginBottom: 16 }}>
+        <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 12 }}>Идентификатор компьютера</div>
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <div style={{
+            flex: 1, padding: '10px 14px', background: 'var(--bg-hover)',
+            border: '1px solid var(--border)', borderRadius: 10,
+            fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-primary)',
+            wordBreak: 'break-all', lineHeight: 1.5,
+          }}>
+            {machineId || 'Загрузка...'}
+          </div>
+          <button
+            className="btn btn-secondary btn-icon"
+            onClick={() => copyText(machineId, setCopiedId)}
+            title="Скопировать"
+            style={{ color: copiedId ? 'var(--accent-green)' : undefined }}
+          >
+            {copiedId ? <Check size={14} /> : <Copy size={14} />}
+          </button>
+        </div>
+        <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 8 }}>
+          Отправьте этот идентификатор разработчику для получения лицензионного ключа
+        </div>
+      </div>
+
+      {/* Activate / Renew */}
+      {(!hasLicense || showRenewInput) && (
+        <div className="card">
+          <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 12 }}>
+            {hasLicense ? 'Обновить лицензию' : 'Ввести лицензионный ключ'}
+          </div>
+          <div className="form-group">
+            <label>Лицензионный ключ</label>
+            <textarea
+              className="input"
+              value={keyInput}
+              onChange={e => { setKeyInput(e.target.value); setError(''); }}
+              placeholder="Вставьте ключ, полученный от разработчика..."
+              rows={4}
+              style={{ fontFamily: 'var(--font-mono)', fontSize: 11, lineHeight: 1.6, resize: 'vertical' }}
+            />
+          </div>
+          {error && (
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', background: 'rgba(239,68,68,0.1)', border: '1px solid var(--accent-red)', borderRadius: 8, padding: '8px 12px', color: 'var(--accent-red)', fontSize: 12, marginBottom: 12 }}>
+              <AlertCircle size={13} /> {error}
+            </div>
+          )}
+          <div style={{ display: 'flex', gap: 8 }}>
+            {showRenewInput && (
+              <button className="btn btn-secondary" onClick={() => { setShowRenewInput(false); setKeyInput(''); setError(''); }}>Отмена</button>
+            )}
+            <button className="btn btn-primary" onClick={handleActivate} disabled={activating || !keyInput.trim()}>
+              <KeyRound size={14} />
+              {activating ? 'Проверка...' : 'Активировать'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {hasLicense && !showRenewInput && (
+        <button className="btn btn-secondary" onClick={() => setShowRenewInput(true)}>
+          <KeyRound size={14} /> Обновить лицензионный ключ
+        </button>
+      )}
+    </div>
+  );
+}
+
+// ── Logs Tab ──────────────────────────────────────────────────────────────────
+function LogsTab() {
+  const showToast = useToast();
+  const [logs, setLogs] = useState('');
+  const [filter, setFilter] = useState('ALL');
+  const [downloading, setDownloading] = useState(false);
+  const [clearing, setClearing] = useState(false);
+  const logsRef = useRef(null);
+
+  const loadLogs = async () => {
+    const content = await window.api?.readLogs?.() || '';
+    setLogs(content);
+  };
+
+  useEffect(() => { loadLogs(); }, []);
+
+  // Auto-scroll to bottom when logs load
+  useEffect(() => {
+    if (logsRef.current) logsRef.current.scrollTop = logsRef.current.scrollHeight;
+  }, [logs, filter]);
+
+  const filteredLines = logs.split('\n').filter(l => {
+    if (!l.trim()) return false;
+    if (filter === 'ALL') return true;
+    return l.includes(`[${filter}]`);
+  });
+
+  const lineColor = (line) => {
+    if (line.includes('[ERROR]')) return 'var(--accent-red)';
+    if (line.includes('[WARN]')) return 'var(--accent-gold)';
+    if (line.includes('[INFO]')) return 'var(--accent-light)';
+    return 'var(--text-secondary)';
+  };
+
+  const handleDownload = async () => {
+    setDownloading(true);
+    const result = await window.api?.downloadLogs?.();
+    setDownloading(false);
+    if (result?.ok) showToast('Файл сохранён');
+    else if (result?.error) showToast(result.error, 'error');
+  };
+
+  const handleClear = async () => {
+    if (!window.confirm('Очистить лог-файл?')) return;
+    setClearing(true);
+    await window.api?.clearLogs?.();
+    setLogs('');
+    setClearing(false);
+    showToast('Лог очищен');
+  };
+
+  return (
+    <div style={{ maxWidth: 760 }}>
+      <div className="card">
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
+          <div style={{ fontWeight: 700, fontSize: 15 }}>Журнал ошибок</div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            {/* Filter buttons */}
+            <div style={{ display: 'flex', gap: 2, background: 'var(--bg-hover)', borderRadius: 8, padding: 3 }}>
+              {['ALL', 'ERROR', 'WARN', 'INFO'].map(f => (
+                <button key={f} onClick={() => setFilter(f)} style={{
+                  padding: '4px 10px', border: 'none', borderRadius: 6, cursor: 'pointer',
+                  background: filter === f ? 'var(--bg-active)' : 'transparent',
+                  color: filter === f
+                    ? (f === 'ERROR' ? 'var(--accent-red)' : f === 'WARN' ? 'var(--accent-gold)' : f === 'INFO' ? 'var(--accent-light)' : 'var(--text-primary)')
+                    : 'var(--text-muted)',
+                  fontSize: 11, fontWeight: 700, transition: 'all 0.15s',
+                }}>
+                  {f}
+                </button>
+              ))}
+            </div>
+            <button className="btn btn-secondary btn-sm" onClick={loadLogs}><RefreshCw size={13} /></button>
+            <button className="btn btn-secondary btn-sm" onClick={handleDownload} disabled={downloading}>
+              <Download size={13} /> {downloading ? 'Сохраняем...' : 'Скачать'}
+            </button>
+            <button className="btn btn-danger btn-sm" onClick={handleClear} disabled={clearing}>
+              <X size={13} /> Очистить
+            </button>
+          </div>
+        </div>
+
+        {filteredLines.length === 0 ? (
+          <div style={{ padding: '32px 0', textAlign: 'center', color: 'var(--text-muted)', fontSize: 13 }}>
+            <ScrollText size={28} style={{ marginBottom: 8, opacity: 0.4 }} />
+            <div>Записей нет</div>
+          </div>
+        ) : (
+          <div
+            ref={logsRef}
+            style={{
+              maxHeight: 480, overflowY: 'auto',
+              background: '#0a0a10', borderRadius: 10, padding: '12px 14px',
+              fontFamily: 'var(--font-mono)', fontSize: 11, lineHeight: 1.7,
+              border: '1px solid var(--border)',
+            }}
+          >
+            {filteredLines.map((line, i) => (
+              <div key={i} style={{ color: lineColor(line), wordBreak: 'break-all', padding: '1px 0' }}>
+                {line}
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div style={{ marginTop: 10, fontSize: 11, color: 'var(--text-muted)' }}>
+          Хранятся записи за последние 30 дней. Последние {filteredLines.length} строк.
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Main Settings Page ────────────────────────────────────────────────────────
 export default function SettingsPage() {
-  const { settings, updateSetting, appVersion, updateStatus, updateInfo } = useApp();
+  const { settings, updateSetting, appVersion, updateStatus, updateInfo, licenseStatus } = useApp();
   const showToast = useToast();
   const [tab, setTab] = useState('general');
   const [rooms, setRooms] = useState([]);
@@ -518,11 +916,13 @@ export default function SettingsPage() {
     loadComps();
   };
 
+  const natSort = (a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+
   const compsByRoom = rooms.map(r => ({
     ...r,
-    computers: computers.filter(c => Number(c.room_id) === Number(r.id)),
+    computers: computers.filter(c => Number(c.room_id) === Number(r.id)).sort(natSort),
   }));
-  const noRoomComps = computers.filter(c => !c.room_id);
+  const noRoomComps = computers.filter(c => !c.room_id).sort(natSort);
 
   const BTN_ROW = { display: 'flex', justifyContent: 'flex-end', gap: 8, marginBottom: 16 };
 
@@ -531,11 +931,14 @@ export default function SettingsPage() {
       <div className="page-header">
         <h1 className="page-title">Настройки</h1>
         <p className="page-subtitle" style={{ marginBottom: 16 }}>Конфигурация клуба</p>
-        <div style={{ display: 'flex', gap: 2, borderBottom: '1px solid var(--border)' }}>
+        <div style={{ display: 'flex', gap: 2, borderBottom: '1px solid var(--border)', flexWrap: 'wrap' }}>
           {[
             ['general', 'Основные', null],
             ['rooms', `Комнаты${rooms.length > 0 ? ` (${rooms.length})` : ''}`, null],
             ['computers', `Компьютеры${computers.length > 0 ? ` (${computers.length})` : ''}`, null],
+            ['backup', 'Резервные копии', null],
+            ['license', 'Лицензия', (licenseStatus === 'grace' || licenseStatus === 'readonly') ? 'var(--accent-red)' : null],
+            ['logs', 'Логи', null],
             ['updates', 'Обновления', (updateStatus === 'available' || updateStatus === 'downloaded') ? (updateStatus === 'downloaded' ? 'var(--accent-green)' : 'var(--accent-gold)') : null],
           ].map(([key, label, dot]) => (
             <button key={key} onClick={() => setTab(key)} style={{
@@ -616,7 +1019,9 @@ export default function SettingsPage() {
                         <div style={{ width: 14, height: 14, borderRadius: 4, background: r.color || '#6366f1', flexShrink: 0 }} />
                         <div>
                           <div style={{ fontWeight: 700, fontSize: 14 }}>{r.name}</div>
-                          <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>{r.type}</div>
+                          <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2 }}>
+                            {{ standard: 'Стандарт', vip: 'VIP', comfort: 'Комфорт' }[r.type] || r.type}
+                          </div>
                         </div>
                       </div>
                       <div style={{ display: 'flex', gap: 4 }}>
@@ -712,6 +1117,15 @@ export default function SettingsPage() {
             )}
           </div>
         )}
+
+        {/* ── Backup ── */}
+        {tab === 'backup' && <BackupTab />}
+
+        {/* ── License ── */}
+        {tab === 'license' && <LicenseTab />}
+
+        {/* ── Logs ── */}
+        {tab === 'logs' && <LogsTab />}
 
         {/* ── Updates ── */}
         {tab === 'updates' && (

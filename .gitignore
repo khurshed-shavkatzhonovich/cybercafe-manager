@@ -5,6 +5,10 @@ node_modules/
 build/
 dist/
 
+# License private key — NEVER commit (public key is embedded in license.js)
+scripts/license-keys/private.pem
+scripts/license-keys/issued-licenses.log
+
 # Environment & secrets — NEVER commit
 .env
 .env.local
